@@ -53,6 +53,41 @@ type AnalysisRow = {
   created_at: string | null;
 };
 
+function toText(value: unknown): string | null {
+  if (value == null) return null;
+  if (typeof value === "string") return value.trim() || null;
+  if (typeof value === "number") return String(value);
+  if (Array.isArray(value)) {
+    const parts = value.map(toText).filter(Boolean) as string[];
+    return parts.length ? parts.join(" & ") : null;
+  }
+  if (typeof value === "object") {
+    const parts = Object.values(value as Record<string, unknown>)
+      .map(toText)
+      .filter(Boolean) as string[];
+    return parts.length ? parts.join(" & ") : null;
+  }
+  return null;
+}
+
+function buildTitle(
+  extracted: Record<string, unknown> | null | undefined,
+  docType: string,
+  fallbackText: string,
+): string {
+  const property = toText(extracted?.["property"]);
+  const parties = toText(extracted?.["parties"]);
+
+  const shortProperty = property ? property.split(/[\n]/)[0]!.slice(0, 70) : null;
+  const shortParties = parties ? parties.split(/[\n]/)[0]!.slice(0, 60) : null;
+
+  const pieces = [shortProperty, shortParties].filter(Boolean) as string[];
+  if (pieces.length) return `${docType} — ${pieces.join(" · ")}`.slice(0, 160);
+
+  const firstLine = fallbackText.trim().split("\n")[0]?.slice(0, 120);
+  return firstLine || "Untitled document";
+}
+
 function Index() {
   const [text, setText] = useState("");
   const [docType, setDocType] = useState("Rental Agreement");
@@ -66,7 +101,7 @@ function Index() {
         data: { document_text: text, doc_type: docType },
       })) as AnalysisResult;
 
-      const title = text.trim().split("\n")[0]?.slice(0, 120) || "Untitled document";
+      const title = buildTitle(analysis.extracted, docType, text);
       const { error } = await supabase.from("analyses").insert({
         document_text: text,
         doc_type: docType,
