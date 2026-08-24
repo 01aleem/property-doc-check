@@ -1,6 +1,9 @@
 import { createFileRoute } from "@tanstack/react-router";
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { useServerFn } from "@tanstack/react-start";
 import { useState } from "react";
+import { toast } from "sonner";
+import { analyzeDocument } from "@/lib/analyze-document.functions";
 import { supabase } from "@/integrations/supabase/client";
 import { Button } from "@/components/ui/button";
 import { Textarea } from "@/components/ui/textarea";
@@ -13,7 +16,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { Badge } from "@/components/ui/badge";
-import { FileText } from "lucide-react";
+import { FileText, Loader2 } from "lucide-react";
 
 export const Route = createFileRoute("/")({
   head: () => ({
@@ -35,6 +38,13 @@ export const Route = createFileRoute("/")({
   component: Index,
 });
 
+type AnalysisResult = {
+  extracted: Record<string, unknown>;
+  flags: Array<{ item: string; status: string; note: string }>;
+  verdict: string;
+  summary: string;
+};
+
 type AnalysisRow = {
   id: string;
   title: string | null;
@@ -46,6 +56,37 @@ type AnalysisRow = {
 function Index() {
   const [text, setText] = useState("");
   const [docType, setDocType] = useState("Rental Agreement");
+  const [result, setResult] = useState<AnalysisResult | null>(null);
+  const queryClient = useQueryClient();
+  const runAnalysis = useServerFn(analyzeDocument);
+
+  const analyze = useMutation({
+    mutationFn: async () => {
+      const analysis = (await runAnalysis({
+        data: { document_text: text, doc_type: docType },
+      })) as AnalysisResult;
+
+      const title = text.trim().split("\n")[0]?.slice(0, 120) || "Untitled document";
+      const { error } = await supabase.from("analyses").insert({
+        document_text: text,
+        doc_type: docType,
+        title,
+        verdict: analysis.verdict,
+        summary: analysis.summary,
+        extracted: analysis.extracted as never,
+        flags: analysis.flags as never,
+      });
+      if (error) throw error;
+      return analysis;
+    },
+    onSuccess: (analysis) => {
+      setResult(analysis);
+      void queryClient.invalidateQueries({ queryKey: ["analyses"] });
+    },
+    onError: (error: Error) => {
+      toast.error(error.message || "Analysis failed. Please try again.");
+    },
+  });
 
   const { data: analyses, isLoading } = useQuery({
     queryKey: ["analyses"],
@@ -106,18 +147,90 @@ function Index() {
               </Select>
             </div>
 
-            <Button disabled={text.trim().length === 0}>Analyze Document</Button>
+            <Button
+              onClick={() => analyze.mutate()}
+              disabled={text.trim().length === 0 || analyze.isPending}
+            >
+              {analyze.isPending ? (
+                <>
+                  <Loader2 className="h-4 w-4 animate-spin" aria-hidden="true" />
+                  Analyzing…
+                </>
+              ) : (
+                "Analyze Document"
+              )}
+            </Button>
           </div>
         </section>
 
-        <section
-          aria-label="Analysis results"
-          className="rounded-lg border border-dashed border-border bg-background/60 p-10 text-center"
-        >
-          <p className="text-sm text-muted-foreground">
-            Results will appear here after you analyze a document.
-          </p>
-        </section>
+        {result ? (
+          <section
+            aria-label="Analysis results"
+            className="space-y-5 rounded-lg border border-border bg-background p-6 shadow-sm"
+          >
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <h2 className="text-sm font-semibold tracking-tight text-foreground">
+                Analysis results
+              </h2>
+              <Badge variant="secondary">{result.verdict}</Badge>
+            </div>
+
+            <p className="text-sm leading-relaxed text-muted-foreground">{result.summary}</p>
+
+            <div>
+              <h3 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                Compliance checks
+              </h3>
+              <ul className="mt-3 divide-y divide-border rounded-md border border-border">
+                {result.flags?.map((flag, i) => (
+                  <li key={`${flag.item}-${i}`} className="flex gap-3 px-4 py-3">
+                    <Badge
+                      variant={flag.status === "OK" ? "secondary" : "outline"}
+                      className="shrink-0"
+                    >
+                      {flag.status}
+                    </Badge>
+                    <div className="min-w-0">
+                      <p className="text-sm font-medium text-foreground">{flag.item}</p>
+                      <p className="mt-0.5 text-sm text-muted-foreground">{flag.note}</p>
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            </div>
+
+            <div>
+              <h3 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                Extracted details
+              </h3>
+              <dl className="mt-3 grid gap-3 sm:grid-cols-2">
+                {Object.entries(result.extracted ?? {}).map(([key, value]) => (
+                  <div key={key} className="rounded-md border border-border px-4 py-3">
+                    <dt className="text-xs uppercase tracking-wide text-muted-foreground">
+                      {key.replace(/_/g, " ")}
+                    </dt>
+                    <dd className="mt-1 text-sm text-foreground">
+                      {value == null
+                        ? "—"
+                        : typeof value === "string"
+                          ? value
+                          : JSON.stringify(value)}
+                    </dd>
+                  </div>
+                ))}
+              </dl>
+            </div>
+          </section>
+        ) : (
+          <section
+            aria-label="Analysis results"
+            className="rounded-lg border border-dashed border-border bg-background/60 p-10 text-center"
+          >
+            <p className="text-sm text-muted-foreground">
+              Results will appear here after you analyze a document.
+            </p>
+          </section>
+        )}
 
         <section className="rounded-lg border border-border bg-background shadow-sm">
           <div className="border-b border-border px-6 py-4">
