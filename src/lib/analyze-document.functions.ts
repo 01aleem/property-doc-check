@@ -1,5 +1,7 @@
 import { createServerFn } from "@tanstack/react-start";
 
+type Json = string | number | boolean | null | Json[] | { [key: string]: Json };
+
 export type AnalyzeInput = { document_text: string; doc_type: string };
 
 export const analyzeDocument = createServerFn({ method: "POST" })
@@ -68,7 +70,7 @@ Respond with ONLY a valid JSON object, no markdown, no code fences, no commentar
     const rawText = payload.content?.[0]?.text ?? "";
     const cleaned = rawText.replace(/```json/g, "").replace(/```/g, "").trim();
     return JSON.parse(cleaned) as {
-      extracted: Record<string, unknown>;
+      extracted: Record<string, Json>;
       flags: Array<{ item: string; status: string; note: string }>;
       verdict: string;
       summary: string;
